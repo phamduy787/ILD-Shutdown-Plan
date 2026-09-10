@@ -19,4 +19,20 @@ export async function POST(request: Request) {
   return Response.json({ ok: true, role });
 }
 export async function DELETE() { (await cookies()).delete("shutdown_edit"); return Response.json({ ok: true }); }
-export async function GET() { const role = await currentRole(); return Response.json({ canEdit: Boolean(role), role }); }
+export async function GET() {
+  try {
+    const role = await currentRole();
+
+    return Response.json({
+      canEdit: Boolean(role),
+      role
+    });
+  } catch (error) {
+    console.error("AUTH GET ERROR:", error);
+
+    return Response.json({
+      canEdit: false,
+      role: null
+    });
+  }
+}
