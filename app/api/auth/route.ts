@@ -18,7 +18,17 @@ export async function POST(request: Request) {
   (await cookies()).set("shutdown_edit", await editToken(`${role}:${pin}`), { httpOnly: true, secure: true, sameSite: "strict", path: "/", maxAge: 60 * 60 * 8 });
   return Response.json({ ok: true, role });
 }
-export async function DELETE() { (await cookies()).delete("shutdown_edit"); return Response.json({ ok: true }); }
+export async function DELETE() {
+  (await cookies()).set("shutdown_edit", "", {
+    httpOnly: true,
+    secure: true,
+    sameSite: "strict",
+    path: "/",
+    expires: new Date(0),
+  });
+
+  return Response.json({ ok: true });
+}
 export async function GET() {
   try {
     const role = await currentRole();
