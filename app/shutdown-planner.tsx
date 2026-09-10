@@ -92,7 +92,7 @@ export default function ShutdownPlanner() {
   const [autoStatus, setAutoStatus] = useState(1);
   const [detailColor, setDetailColor] = useState("green");
   const [dirty, setDirty] = useState(false);
-  const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set());
+  const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set());const clipboardCellsRef = useRef<Map<string, number>>(new Map());
   const [selectedTextCell, setSelectedTextCell] = useState<{ key: string; hour: number } | null>(null);
   const [filterOpen, setFilterOpen] = useState(false);
   const [hideEmptyRows, setHideEmptyRows] = useState(false);
@@ -118,9 +118,87 @@ export default function ShutdownPlanner() {
   useEffect(() => {
     const stopSelecting = () => { selectingRef.current = false; };
     const handleKeyboard = (event: KeyboardEvent) => {
-      if (canEdit && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z" && !event.shiftKey) { event.preventDefault(); undoLastAction(); return; }
-      if (event.key === "Delete" && canEdit && selectedCells.size) { event.preventDefault(); clearSelectedCells(); }
-    };
+  if (
+    canEdit &&
+    (event.ctrlKey || event.metaKey) &&
+    event.key.toLowerCase() === "z" &&
+    !event.shiftKey
+  ) {
+    event.preventDefault();
+    undoLastAction();
+    return;
+  }
+
+  if (
+    canEdit &&
+    (event.ctrlKey || event.metaKey) &&
+    event.key.toLowerCase() === "c" &&
+    selectedCells.size
+  ) {
+    event.preventDefault();
+
+    const copied = new Map<string, number>();
+
+    for (const id of selectedCells) {
+      copied.set(id, cells[id] || 0);
+    }
+
+    clipboardCellsRef.current = copied;
+    return;
+  }
+
+  if (
+    canEdit &&
+    (event.ctrlKey || event.metaKey) &&
+    event.key.toLowerCase() === "v" &&
+    selectedCells.size &&
+    clipboardCellsRef.current.size
+  ) {
+    event.preventDefault();
+
+    rememberUndo();
+
+    const copiedValues = [
+      ...clipboardCellsRef.current.values(),
+    ];
+
+    let index = 0;
+
+    setCells((current) => {
+      const next = { ...current };
+
+      for (const id of selectedCells) {
+        const value =
+          copiedValues[
+            Math.min(index, copiedValues.length - 1)
+          ];
+
+        next[id] = value;
+
+        const split = id.lastIndexOf(":");
+
+        stageCell(
+          id.slice(0, split),
+          Number(id.slice(split + 1)),
+          value
+        );
+
+        index++;
+      }
+
+      return next;
+    });
+
+    markDirty();
+    return;
+  }
+
+  if (event.key === "Delete" && canEdit && selectedCells.size) {
+    event.preventDefault();
+    clearSelectedCells();
+  }
+};
+
     window.addEventListener("pointerup", stopSelecting); window.addEventListener("keydown", handleKeyboard);
     return () => { window.removeEventListener("pointerup", stopSelecting); window.removeEventListener("keydown", handleKeyboard); };
   }, [canEdit, selectedCells]);
