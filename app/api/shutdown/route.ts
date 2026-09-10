@@ -3,7 +3,8 @@ import { env } from "cloudflare:workers";
 const encoder = new TextEncoder();
 async function token(pin: string) { const bytes = await crypto.subtle.digest("SHA-256", encoder.encode(`ild-shutdown-plan:${pin}`)); return Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join(""); }
 type EditRole = "admin" | "input";
-async function editRole(): Promise<EditRole | null> { const values = env as unknown as Record<string, string | undefined>; const admin = values.ADMIN_PIN || values.EDIT_PIN || "2026"; const input = values.INPUT_PIN || ""; const cookie = (await cookies()).get("shutdown_edit")?.value; if (cookie === await token(`admin:${admin}`)) return "admin"; if (input && cookie === await token(`input:${input}`)) return "input"; return null; }
+async function editRole(): Promise<EditRole | null> { const values = env as unknown as Record<string, string | undefined>; const admin = values.ADMIN_PIN || values.EDIT_PIN || "PS2026";
+const input = values.INPUT_PIN || "INPUT2026"; const cookie = (await cookies()).get("shutdown_edit")?.value; if (cookie === await token(`admin:${admin}`)) return "admin"; if (input && cookie === await token(`input:${input}`)) return "input"; return null; }
 function inputMayEditCell(rowKey: string) { return /-actual$/.test(rowKey); }
 function inputMayEditNote(rowKey: string) { return /-note(?:-h-\d+|-color-\d+|-merges)?$/.test(rowKey); }
 export async function GET() {
