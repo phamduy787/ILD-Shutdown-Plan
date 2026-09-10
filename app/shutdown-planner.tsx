@@ -135,7 +135,7 @@ export default function ShutdownPlanner() {
     event.key.toLowerCase() === "c" &&
     selectedCells.size
   ) {
-    event.preventDefault();
+    event.preventDefault();console.log("COPY", [...selectedCells]);
 
     const copied = new Map<string, number>();
 
@@ -154,7 +154,7 @@ export default function ShutdownPlanner() {
     selectedCells.size &&
     clipboardCellsRef.current.size
   ) {
-    event.preventDefault();
+    event.preventDefault();console.log("PASTE", [...selectedCells]);
 
     rememberUndo();
 
