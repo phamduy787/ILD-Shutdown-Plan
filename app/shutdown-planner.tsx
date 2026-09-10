@@ -104,7 +104,6 @@ export default function ShutdownPlanner() {
   const pendingSettings = useRef(new Map<string, { key: string; value: string }>());
   const undoStack = useRef<Array<{ cells: CellMap; notes: NoteMap; startDate: string; timelineStartHour: number }>>([]);
   const selectedTextCellRef = useRef<{ key: string; hour: number } | null>(null);
-  const clipboardValueRef = useRef<number>(0);
 
   async function loadData(showLoading = true) {
     if (showLoading) setLoading(true);
@@ -120,44 +119,6 @@ export default function ShutdownPlanner() {
     const stopSelecting = () => { selectingRef.current = false; };
     const handleKeyboard = (event: KeyboardEvent) => {
       if (canEdit && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z" && !event.shiftKey) { event.preventDefault(); undoLastAction(); return; }
-      if (
-  canEdit &&
-  (event.ctrlKey || event.metaKey) &&
-  event.key.toLowerCase() === "c" &&
-  selectedCells.size === 1
-) {
-  const id = [...selectedCells][0];
-  clipboardValueRef.current = cells[id] || 0;
-  event.preventDefault();
-  return;
-}
-
-if (
-  canEdit &&
-  (event.ctrlKey || event.metaKey) &&
-  event.key.toLowerCase() === "v" &&
-  selectedCells.size > 0
-) {
-  rememberUndo();
-
-  setCells((current) => {
-    const next = { ...current };
-
-    for (const id of selectedCells) {
-      const split = id.lastIndexOf(":");
-      const rowKey = id.slice(0, split);
-      const hour = Number(id.slice(split + 1));
-
-      next[id] = clipboardValueRef.current;
-      stageCell(rowKey, hour, clipboardValueRef.current);
-    }
-
-    return next;
-  });
-
-  event.preventDefault();
-  return;
-}
       if (event.key === "Delete" && canEdit && selectedCells.size) { event.preventDefault(); clearSelectedCells(); }
     };
     window.addEventListener("pointerup", stopSelecting); window.addEventListener("keydown", handleKeyboard);
