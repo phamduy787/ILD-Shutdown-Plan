@@ -146,12 +146,71 @@ export default function ShutdownPlanner() {
   function stageNote(rowKey: string, content: string) { pendingNotes.current.set(rowKey, { rowKey, content }); markDirty(); }
   function stageSetting(key: string, value: string) { pendingSettings.current.set(key, { key, value }); markDirty(); }
   async function saveChanges() {
-    if (!canEdit || !dirtyRef.current) return;
-    setSaving(true); const cellUpdates = [...pendingCells.current.values()]; const noteUpdates = [...pendingNotes.current.values()]; const settingUpdates = [...pendingSettings.current.values()];
-    const requests: object[] = []; for (let i = 0; i < cellUpdates.length; i += 500) requests.push({ cells: cellUpdates.slice(i, i + 500) }); for (let i = 0; i < noteUpdates.length; i += 50) requests.push({ notes: noteUpdates.slice(i, i + 50) }); if (settingUpdates.length) requests.push({ settings: settingUpdates });
-    let ok = true; for (const payload of requests) { const response = await fetch("/api/shutdown", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }); if (!response.ok) ok = false; if (response.status === 403) setEditRole(null); }
-    setSaving(false); if (ok) { pendingCells.current.clear(); pendingNotes.current.clear(); pendingSettings.current.clear(); dirtyRef.current = false; setDirty(false); setLastSaved(new Date().toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" })); }
+  if (!canEdit || !dirtyRef.current) return;
+
+  try {
+    setSaving(true);
+
+    const cellUpdates = [...pendingCells.current.values()];
+    const noteUpdates = [...pendingNotes.current.values()];
+    const settingUpdates = [...pendingSettings.current.values()];
+
+    const requests: object[] = [];
+
+    for (let i = 0; i < cellUpdates.length; i += 500) {
+      requests.push({ cells: cellUpdates.slice(i, i + 500) });
+    }
+
+    for (let i = 0; i < noteUpdates.length; i += 50) {
+      requests.push({ notes: noteUpdates.slice(i, i + 50) });
+    }
+
+    if (settingUpdates.length) {
+      requests.push({ settings: settingUpdates });
+    }
+
+    let ok = true;
+
+    for (const payload of requests) {
+      const response = await fetch("/api/shutdown", {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        ok = false;
+        console.error(await response.text());
+      }
+
+      if (response.status === 403) {
+        setEditRole(null);
+      }
+    }
+
+    if (ok) {
+      pendingCells.current.clear();
+      pendingNotes.current.clear();
+      pendingSettings.current.clear();
+
+      dirtyRef.current = false;
+      setDirty(false);
+
+      setLastSaved(
+        new Date().toLocaleTimeString("vi-VN", {
+          hour: "2-digit",
+          minute: "2-digit",
+        })
+      );
+    }
+  } catch (error) {
+    console.error("SAVE ERROR:", error);
+  } finally {
+    setSaving(false);
   }
+}
   function updateCell(key: string, hourIndex: number, raw: string) {
     if (!canEdit) return; const value = raw === "" ? 0 : Math.max(0, Math.min(3, Number.parseInt(raw.replace(/\D/g, ""), 10) || 0));
     rememberUndo();
