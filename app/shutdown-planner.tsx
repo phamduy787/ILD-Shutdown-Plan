@@ -118,6 +118,7 @@ export default function ShutdownPlanner() {
   useEffect(() => {
     const stopSelecting = () => { selectingRef.current = false; };
     const handleKeyboard = (event: KeyboardEvent) => {
+      console.log("KEY", event.key);
   if (
     canEdit &&
     (event.ctrlKey || event.metaKey) &&
