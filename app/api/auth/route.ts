@@ -3,7 +3,7 @@ import { env } from "cloudflare:workers";
 const encoder = new TextEncoder();
 async function editToken(pin: string) { const bytes = await crypto.subtle.digest("SHA-256", encoder.encode(`ild-shutdown-plan:${pin}`)); return Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join(""); }
 type EditRole = "admin" | "input";
-function configuredPins() { const values = env as unknown as Record<string, string | undefined>; return { admin: values.ADMIN_PIN || values.EDIT_PIN || "2026", input: values.INPUT_PIN || "" }; }
+function configuredPins() { const values = env as unknown as Record<string, string | undefined>; return { admin: values.ADMIN_PIN || values.EDIT_PIN, input: values.INPUT_PIN || "" }; }
 async function currentRole(): Promise<EditRole | null> {
   const cookie = (await cookies()).get("shutdown_edit")?.value; const pins = configuredPins();
   if (cookie === await editToken(`admin:${pins.admin}`)) return "admin";
