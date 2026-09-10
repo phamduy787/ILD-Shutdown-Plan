@@ -104,7 +104,7 @@ export default function ShutdownPlanner() {
   const pendingSettings = useRef(new Map<string, { key: string; value: string }>());
   const undoStack = useRef<Array<{ cells: CellMap; notes: NoteMap; startDate: string; timelineStartHour: number }>>([]);
   const selectedTextCellRef = useRef<{ key: string; hour: number } | null>(null);
-  const clipboardValueRef = useRef<number | null>(null);
+  const clipboardValueRef = useRef<number>(0);
 
   async function loadData(showLoading = true) {
     if (showLoading) setLoading(true);
@@ -127,10 +127,7 @@ export default function ShutdownPlanner() {
   selectedCells.size === 1
 ) {
   const id = [...selectedCells][0];
-  clipboardValueRef.current = Number(cells[id] || 0);
-
-console.log("COPIED:", clipboardValueRef.current);
-``
+  clipboardValueRef.current = cells[id] || 0;
   event.preventDefault();
   return;
 }
@@ -140,9 +137,7 @@ if (
   (event.ctrlKey || event.metaKey) &&
   event.key.toLowerCase() === "v" &&
   selectedCells.size > 0
-)
-console.log("PASTE:", clipboardValueRef.current);
- {
+) {
   rememberUndo();
 
   setCells((current) => {
