@@ -25,14 +25,14 @@ export async function GET() {
 
     return Response.json({
       canEdit: Boolean(role),
-      role
+      role,
     });
   } catch (error) {
-    console.error("AUTH GET ERROR:", error);
+    console.error("AUTH GET ERROR", error);
 
     return Response.json({
       canEdit: false,
-      role: null
+      role: null,
     });
   }
 }
