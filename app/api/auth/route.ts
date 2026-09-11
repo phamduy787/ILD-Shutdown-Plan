@@ -34,8 +34,7 @@ export async function GET() {
     const role = await currentRole();
 
     return Response.json({
-      canEdit: Boolean(role),
-      role,
+      debug: "TEST123"
     });
   } catch (error) {
     console.error("AUTH GET ERROR:", error);
