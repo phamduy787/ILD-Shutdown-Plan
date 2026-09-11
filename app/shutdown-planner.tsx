@@ -93,6 +93,11 @@ export default function ShutdownPlanner() {
   const [detailColor, setDetailColor] = useState("green");
   const [dirty, setDirty] = useState(false);
   const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set());const clipboardCellsRef = useRef<Map<string, number>>(new Map());
+
+  const clipboardTextRef = useRef<{
+  key: string;
+  text: string;
+} | null>(null);
   const [selectedTextCell, setSelectedTextCell] = useState<{ key: string; hour: number } | null>(null);
   const [filterOpen, setFilterOpen] = useState(false);
   const [hideEmptyRows, setHideEmptyRows] = useState(false);
@@ -129,7 +134,31 @@ export default function ShutdownPlanner() {
     undoLastAction();
     return;
   }
+if (
+  canEdit &&
+  (event.ctrlKey || event.metaKey) &&
+  event.key.toLowerCase() === "c" &&
+  selectedTextCell
+) {
+  event.preventDefault();
 
+  const text =
+    notes[
+      `${selectedTextCell.key}-h-${selectedTextCell.hour}`
+    ] || "";
+
+  clipboardTextRef.current = {
+    key: selectedTextCell.key,
+    text,
+  };
+
+  console.log(
+    "TEXT COPIED",
+    clipboardTextRef.current
+  );
+
+  return;
+}
   if (
     canEdit &&
     (event.ctrlKey || event.metaKey) &&
@@ -147,7 +176,35 @@ export default function ShutdownPlanner() {
     clipboardCellsRef.current = copied;
     return;
   }
+if (
+  canEdit &&
+  (event.ctrlKey || event.metaKey) &&
+  event.key.toLowerCase() === "v" &&
+  selectedTextCell &&
+  clipboardTextRef.current
+) {
+  event.preventDefault();
 
+  const textKey =
+    `${selectedTextCell.key}-h-${selectedTextCell.hour}`;
+
+  setNotes((current) => ({
+  ...current,
+  [textKey]: clipboardTextRef.current!.text,
+}));
+
+  stageNote(
+    textKey,
+    clipboardTextRef.current.text
+  );
+
+  console.log(
+    "TEXT PASTED",
+    textKey
+  );
+
+  return;
+}
   if (
     canEdit &&
     (event.ctrlKey || event.metaKey) &&
