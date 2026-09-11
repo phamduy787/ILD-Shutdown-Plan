@@ -114,7 +114,9 @@ export default function ShutdownPlanner() {
     const settings = Object.fromEntries((data.settings || []).map((item: { key: string; value: string }) => [item.key, item.value]));
     setCells(nextCells); setNotes(nextNotes); if (settings.startDate) setStartDate(settings.startDate); if (settings.timelineStartHour) setTimelineStartHour(Math.max(1, Math.min(24, Number(settings.timelineStartHour) || 1))); undoStack.current = []; setEditRole(auth.role === "admin" || auth.role === "input" ? auth.role : null); setLoading(false);
   }
-  useEffect(() => { loadData(); const timer = window.setInterval(() => { if (!dirtyRef.current) loadData(false); }, 30000); return () => window.clearInterval(timer); }, []);
+  useEffect(() => {
+  loadData();
+}, []);
   useEffect(() => {
     const stopSelecting = () => { selectingRef.current = false; };
     const handleKeyboard = (event: KeyboardEvent) => {
