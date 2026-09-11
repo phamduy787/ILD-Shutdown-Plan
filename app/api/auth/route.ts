@@ -41,8 +41,8 @@ export async function GET() {
     console.error("AUTH GET ERROR:", error);
 
     return Response.json({
-      canEdit: true,
-      role: "admin",
+      canEdit: false,
+      role: null,
     });
   }
 }
