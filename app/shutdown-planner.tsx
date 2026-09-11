@@ -118,7 +118,7 @@ export default function ShutdownPlanner() {
   useEffect(() => {
     const stopSelecting = () => { selectingRef.current = false; };
     const handleKeyboard = (event: KeyboardEvent) => {
-      console.log("KEY", event.key);
+      
   if (
     canEdit &&
     (event.ctrlKey || event.metaKey) &&
@@ -251,13 +251,35 @@ export default function ShutdownPlanner() {
     let ok = true;
 
     for (const payload of requests) {
-      const response = await fetch("/api/shutdown", {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
-      });
+  const response = await fetch("/api/shutdown", {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  console.log(
+    "SAVE STATUS",
+    response.status,
+    payload
+  );
+
+  if (!response.ok) {
+    console.log(
+      "SAVE RESPONSE",
+      await response.text()
+    );
+  }
+
+  if (!response.ok) {
+    ok = false;
+  }
+
+  if (response.status === 403) {
+    setEditRole(null);
+  }
+}
 
       if (!response.ok) {
         ok = false;
