@@ -266,30 +266,18 @@ export default function ShutdownPlanner() {
   );
 
   if (!response.ok) {
+    ok = false;
+
     console.log(
       "SAVE RESPONSE",
       await response.text()
     );
   }
 
-  if (!response.ok) {
-    ok = false;
-  }
-
   if (response.status === 403) {
     setEditRole(null);
   }
 }
-
-      if (!response.ok) {
-        ok = false;
-        console.error(await response.text());
-      }
-
-      if (response.status === 403) {
-        setEditRole(null);
-      }
-    }
 
     if (ok) {
       pendingCells.current.clear();
