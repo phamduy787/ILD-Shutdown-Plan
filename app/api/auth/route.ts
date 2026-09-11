@@ -11,6 +11,30 @@ function configuredPins() {
     input: values.INPUT_PIN || "INPUT2026"
   };
 }
+async function currentRole(): Promise<EditRole | null> {
+  const pins = configuredPins();
+
+  const cookie = (await cookies())
+    .get("shutdown_edit")
+    ?.value;
+
+  if (
+    cookie ===
+    await editToken(`admin:${pins.admin}`)
+  ) {
+    return "admin";
+  }
+
+  if (
+    pins.input &&
+    cookie ===
+      await editToken(`input:${pins.input}`)
+  ) {
+    return "input";
+  }
+
+  return null;
+}
 export async function POST(request: Request) {
   const body = (await request.json().catch(() => null)) as { pin?: string } | null; const pin = body?.pin?.trim() || "";
   const pins = configuredPins(); const role: EditRole | null = pin === pins.admin ? "admin" : pins.input && pin === pins.input ? "input" : null;
@@ -34,7 +58,8 @@ export async function GET() {
     const role = await currentRole();
 
     return Response.json({
-      debug: "TEST123"
+      canEdit: Boolean(role),
+      role,
     });
   } catch (error) {
     console.error("AUTH GET ERROR:", error);
