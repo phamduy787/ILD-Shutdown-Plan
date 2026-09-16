@@ -1,4 +1,4 @@
-export type ClipCell = { text: string; color: string; span: number; covered?: boolean; kind?: "status" | "text" };
+export type ClipCell = { text: string; color: string; span: number; covered?: boolean; reason?: string; kind?: "status" | "text" };
 export type ClipGrid = ClipCell[][];
 export const palette: Record<string, string> = { white: "#ffffff", plan: "#94a3b8", done: "#10b981", late: "#ef3340", green: "#dcfce7", blue: "#dbeafe", red: "#fee2e2", purple: "#ede9fe" };
 export function normalizeColor(value: string): string {
@@ -50,7 +50,7 @@ export function parseClipboard(html: string, plain: string): ClipGrid {
       for (const br of td.querySelectorAll("br")) br.replaceWith(doc.createTextNode("\n"));
       const text = (td.textContent || "").replaceAll("\u00a0", " ");
       const span = Math.max(1, td.colSpan);
-      row.push({ text, span, color: normalizeColor(color), kind: internalKind === "status" || internalKind === "text" ? internalKind : undefined });
+      row.push({ text, span, reason: td.getAttribute("data-ild-reason") || undefined, color: normalizeColor(color), kind: internalKind === "status" || internalKind === "text" ? internalKind : undefined });
       for (let i = 1; i < span; i++) row.push({ text: "", color: normalizeColor(color), span: 1, covered: true });
       if (row.length > 75) throw new Error("Vùng sao chép vượt 75 cột.");
     }
@@ -63,7 +63,7 @@ export function parseClipboard(html: string, plain: string): ClipGrid {
 export function encodeClipboard(grid: ClipGrid): { html: string; plain: string } {
   const escape = (s: string) => s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
   const plain = grid.map(r => r.map(c => { const s = c.covered ? "" : c.text; return /[\t\r\n"]/.test(s) ? '"' + s.replaceAll('"', '""') + '"' : s; }).join('\t')).join('\r\n');
-  const html = '<html><body><table>' + grid.map(r => '<tr>' + r.filter(c => !c.covered).map(c => `<td data-ild-kind="${c.kind || "text"}" colspan="${c.span}" style="background-color:${palette[c.color] || "#ffffff"};white-space:pre-wrap;text-align:center">${escape(c.text)}</td>`).join('') + '</tr>').join('') + '</table></body></html>';
+  const html = '<html><body><table>' + grid.map(r => '<tr>' + r.filter(c => !c.covered).map(c => `<td data-ild-kind="${c.kind || "text"}" data-ild-reason="${escape(c.reason || "")}" colspan="${c.span}" style="background-color:${palette[c.color] || "#ffffff"};white-space:pre-wrap;text-align:center">${escape(c.text)}</td>`).join('') + '</tr>').join('') + '</table></body></html>';
   return { html, plain };
 }
 export function statusValue(cell: ClipCell, colors: Record<string,string> = {}): number {

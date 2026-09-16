@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { canWriteCell, canWriteNote, isActualRow, reasonKey, reconcileReasons } from "@/lib/shutdown-permissions";
 import { parseClipboard, encodeClipboard, statusValue, detailColorFor, palette, type ClipGrid } from "@/lib/timeline-clipboard";
 import { Activity, CalendarDays, Download, Filter, LockKeyhole, RefreshCw, RotateCcw, Save, ShieldCheck, Undo2, UnlockKeyhole } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -18,6 +19,7 @@ function utilityRows(): ActivityRow[] { return [
   { label: "Plan", key: "plan", kind: "plan" },
   { label: "Detail activity", key: "plan-detail", kind: "detail-plan" },
   { label: "Actual", key: "actual", kind: "actual" },
+  { label: "Utility Note", key: "note", kind: "note" },
 ]; }
 
 function productionRows(prefix: string): ActivityRow[] {
@@ -25,10 +27,11 @@ function productionRows(prefix: string): ActivityRow[] {
     { label: `${prefix} Plan`, key: "prod-plan", kind: "plan" },
     { label: "Detail activity", key: "prod-plan-detail", kind: "detail-plan" },
     { label: `${prefix} Actual`, key: "prod-actual", kind: "actual" },
+    { label: "Prod Note", key: "prod-note", kind: "note" },
     { label: "Maintenance Prod Plan", key: "maintenance-prod-plan", kind: "maintenance" },
     { label: "Detail activity", key: "maintenance-prod-plan-detail", kind: "detail-maintenance" },
     { label: "Maintenance Prod Actual", key: "maintenance-prod-actual", kind: "actual" },
-    { label: "Note", key: "note", kind: "note" },
+    { label: "Main Note", key: "note", kind: "note" },
   ];
 }
 
@@ -37,10 +40,11 @@ const PROCESSES: Process[] = [
     { label: "Tipping Plan", key: "tipping-plan", kind: "plan" },
     { label: "Detail activity", key: "tipping-plan-detail", kind: "detail-plan" },
     { label: "Tipping Actual", key: "tipping-actual", kind: "actual" },
+    { label: "Prod Note", key: "prod-note", kind: "note" },
     { label: "Maintenance Plan", key: "maintenance-plan", kind: "maintenance" },
     { label: "Detail activity", key: "maintenance-plan-detail", kind: "detail-maintenance" },
     { label: "Maintenance Actual", key: "maintenance-actual", kind: "actual" },
-    { label: "Note", key: "note", kind: "note" },
+    { label: "Main Note", key: "note", kind: "note" },
   ] },
   { name: "Roasting", tone: "orange", rows: productionRows("Prod") },
   { name: "Extraction", tone: "emerald", rows: productionRows("Prod") },
@@ -58,7 +62,7 @@ type CellMap = Record<string, number>;
 type NoteMap = Record<string, string>;
 type MergeRange = { start: number; end: number };
 type MergeMode = "merge" | "split";
-type EditRole = "admin" | "input" | null;
+type EditRole = "admin" | "prod" | "main" | null;
 const DETAIL_COLORS: Record<string, string> = { blue: "#dbeafe", green: "#dcfce7", red: "#fee2e2", purple: "#ede9fe", white: "#f8fbfd" };
 function slug(value: string) { return value.toLowerCase().replaceAll("&", "and").replaceAll(/[^a-z0-9]+/g, "-").replaceAll(/(^-|-$)/g, ""); }
 function rowKey(process: string, row: ActivityRow) { return `${slug(process)}-${row.key}`; }
@@ -71,12 +75,12 @@ function timelineDateBands(startHour: number) {
 }
 function fillClass(value: number) { if (value === 1) return "status-plan"; if (value === 2) return "status-done"; if (value === 3) return "status-late"; return ""; }
 
-function TimelineTextEditor({ value, editable, label, placeholder, onBegin, onChange }: { value: string; editable: boolean; label: string; placeholder: string; onBegin: () => void; onChange: (value: string) => void }) {
+function TimelineTextEditor({ value, editable, label, placeholder, hours, onBegin, onChange }: { value: string; editable: boolean; label: string; placeholder: string; hours?: number; onBegin: () => void; onChange: (value: string) => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const [editing, setEditing] = useState(false);
   useEffect(() => { if (!editing && ref.current && ref.current.textContent !== value) ref.current.textContent = value; }, [value, editing]);
   useEffect(() => { if (editing) { ref.current?.focus(); const range = document.createRange(); range.selectNodeContents(ref.current!); range.collapse(false); const selection = window.getSelection(); selection?.removeAllRanges(); selection?.addRange(range); } }, [editing]);
-  return <div ref={ref} role="textbox" aria-label={label} contentEditable={editable && editing} suppressContentEditableWarning data-editing={editing ? "true" : "false"} data-placeholder={placeholder} className="timeline-text-editor" onDoubleClick={() => { if (editable) { onBegin(); setEditing(true); } }} onBlur={() => setEditing(false)} onKeyDown={e => { if (e.key === "Escape") { setEditing(false); e.currentTarget.blur(); } }} onInput={e => { const text = e.currentTarget.textContent || ""; if (text.length > 300) { e.currentTarget.textContent = text.slice(0,300); } onChange(text.slice(0,300)); }} />;
+  return <div className="detail-content"><div ref={ref} role="textbox" aria-label={label} contentEditable={editable && editing} suppressContentEditableWarning data-editing={editing ? "true" : "false"} data-placeholder={placeholder} className="timeline-text-editor" onDoubleClick={() => { if (editable) { onBegin(); setEditing(true); } }} onBlur={() => setEditing(false)} onKeyDown={e => { if (e.key === "Escape") { setEditing(false); e.currentTarget.blur(); } }} onInput={e => { const text = e.currentTarget.textContent || ""; if (text.length > 300) { e.currentTarget.textContent = text.slice(0,300); } onChange(text.slice(0,300)); }} />{hours !== undefined && <span className="activity-hours" aria-label={`${hours} giờ`}>({hours})</span>}</div>;
 }
 type GridPoint = { row: number; hour: number };
 type GridSelection = { anchor: GridPoint; end: GridPoint };
@@ -123,6 +127,31 @@ export default function ShutdownPlanner() {
   const [pasteDraft, setPasteDraft] = useState<{ grid: ClipGrid; row: number; hour: number } | null>(null);
   const [colorMapping, setColorMapping] = useState<Record<string,string>>({});
   const [message, setMessage] = useState("");
+  const [lateDraft, setLateDraft] = useState<{ ids: string[]; cells: CellMap; notes: NoteMap; editing: boolean } | null>(null);
+  const [lateReason, setLateReason] = useState("");
+  function commitEdit(nextCells: CellMap, nextNotes: NoteMap) { rememberUndo(); stageSnapshot({ cells: nextCells, notes: nextNotes, startDate, timelineStartHour }); }
+  function requestStatusEdit(nextCells: CellMap, nextNotes: NoteMap, ids: string[]) {
+    const late = ids.filter(id => { const key = id.slice(0,id.lastIndexOf(":")); return isActualRow(key) && nextCells[id] === 3 && canWriteCell(editRole,key); });
+    if (late.length) { setLateReason(""); setLateDraft({ ids: late, cells: nextCells, notes: nextNotes, editing: false }); }
+    else commitEdit(nextCells,nextNotes);
+  }
+  function editLateReason(ids: string[]) {
+    const valid = ids.filter(id => { const key = id.slice(0,id.lastIndexOf(":")); return cells[id] === 3 && isActualRow(key) && canWriteCell(editRole,key); });
+    if (!valid.length) { setMessage("Chọn ô Late trên dòng Actual thuộc quyền chỉnh sửa."); return; }
+    const reasons = new Set(valid.map(id => notes[reasonKey(id)] || ""));
+    setLateReason(reasons.size === 1 ? [...reasons][0] : "");
+    setLateDraft({ ids: valid, cells: { ...cells }, notes: { ...notes }, editing: true });
+  }
+  function selectedLateIds() { return bounds ? visibleRows.slice(bounds.top,bounds.bottom+1).flatMap(item => HOURS.slice(bounds.left,bounds.right+1).map(hour => `${item.key}:${hour}`)) : []; }
+  function confirmLate(skip = false) {
+    if (!lateDraft) return;
+    if (lateDraft.ids.some(id => !canWriteNote(editRole,reasonKey(id)))) { setMessage("Quyền chỉnh sửa đã thay đổi."); setLateDraft(null); return; }
+    const nextNotes = { ...lateDraft.notes };
+    if (!skip) for (const id of lateDraft.ids) nextNotes[reasonKey(id)] = lateReason.trim();
+    commitEdit(lateDraft.cells,nextNotes); setLateDraft(null);
+    setMessage("Đã cập nhật vùng Late. Bấm Cập nhật để lưu.");
+  }
+
   const [jumpDate, setJumpDate] = useState(0);
   const [jumpHour, setJumpHour] = useState(1);
   const visibleRows = PROCESSES.filter(p => visibleProcesses.has(p.name)).flatMap(process => process.rows.filter(row => !hideEmptyRows || rowHasData(rowKey(process.name, row), row)).map(row => ({ process, row, key: rowKey(process.name, row) })));
@@ -151,7 +180,7 @@ export default function ShutdownPlanner() {
       const text = item.row.kind.startsWith("detail") || item.row.kind === "note";
       const merge = mergesFor(item.key).find(m => hour >= m.start && hour <= m.end);
       const v = cells[`${item.key}:${hour}`] || 0;
-      return { kind: text ? "text" as const : "status" as const, text: text ? notes[`${item.key}-h-${hour}`] || "" : v ? String(v) : "", color: text ? notes[`${item.key}-color-${hour}`] || "white" : v === 1 ? "plan" : v === 2 ? "done" : v === 3 ? "late" : "white", span: text && merge?.start === hour ? merge.end - merge.start + 1 : 1, covered: Boolean(text && merge && merge.start !== hour) };
+      return { reason: !text && v === 3 ? notes[reasonKey(`${item.key}:${hour}`)] || "" : undefined, kind: text ? "text" as const : "status" as const, text: text ? notes[`${item.key}-h-${hour}`] || "" : v ? String(v) : "", color: text ? notes[`${item.key}-color-${hour}`] || "white" : v === 1 ? "plan" : v === 2 ? "done" : v === 3 ? "late" : "white", span: text && merge?.start === hour ? merge.end - merge.start + 1 : 1, covered: Boolean(text && merge && merge.start !== hour) };
     }));
   }
   async function copyGrid() { try { const data = encodeClipboard(selectedGrid()); await navigator.clipboard.write([new ClipboardItem({ "text/html": new Blob([data.html], { type: "text/html" }), "text/plain": new Blob([data.plain], { type: "text/plain" }) })]); setMessage("Đã copy. Chọn ô đích rồi Ctrl+V trong web hoặc Excel."); } catch { setMessage("Hãy chọn vùng và nhấn Ctrl+C để copy."); timelineRef.current?.focus(); } }
@@ -162,7 +191,7 @@ export default function ShutdownPlanner() {
       if (!grid.length || !grid[0].length) throw new Error("Clipboard không có dữ liệu.");
       if (bounds.top + grid.length > visibleRows.length || bounds.left + grid[0].length > 75) throw new Error("Vùng dán vượt số dòng đang hiển thị hoặc 75 cột.");
       const rows = visibleRows.slice(bounds.top, bounds.top + grid.length);
-      if (rows.some(item => !canEditRow(item.row))) throw new Error("Vùng dán có dòng không được phép chỉnh sửa. Hãy chọn vùng Actual/Note phù hợp với quyền Input.");
+      if (rows.some(item => !canEditRow(item.row))) throw new Error("Vùng dán có dòng không được phép chỉnh sửa. Hãy chọn vùng Actual/Note phù hợp với quyền bộ phận của anh.");
       for (const item of rows) if (mergesFor(item.key).some(m => m.end >= bounds.left && m.start < bounds.left + grid[0].length && (m.start < bounds.left || m.end >= bounds.left + grid[0].length))) throw new Error("Vùng đích cắt ngang ô ghép. Hãy tách ô ghép hoặc chọn đích khác.");
       setColorMapping({}); setPasteDraft({ grid, row: bounds.top, hour: bounds.left }); setMessage("");
     } catch (error) { setMessage((error as Error).message); }
@@ -183,6 +212,8 @@ export default function ShutdownPlanner() {
           if (!isText) {
             if (cell.span > 1 || cell.covered) throw new Error("Ô ghép chỉ được dán vào Detail/Note.");
             nextCells[`${item.key}:${hour}`] = statusValue(cell, colorMapping);
+            if ((cell.reason || "").length > 300) throw new Error("Lý do Late vượt 300 ký tự.");
+            if (isActualRow(item.key)) nextNotes[reasonKey(`${item.key}:${hour}`)] = nextCells[`${item.key}:${hour}`] === 3 ? cell.reason || "" : "";
           } else {
             if (cell.text.length > 300) throw new Error("Nội dung một ô vượt 300 ký tự. Hãy chia nhỏ trong Excel trước khi dán.");
             nextNotes[`${item.key}-h-${hour}`] = cell.covered ? "" : cell.text;
@@ -192,9 +223,13 @@ export default function ShutdownPlanner() {
         }
         if (isText) nextNotes[`${item.key}-merges`] = JSON.stringify(merges.sort((a,b) => a.start-b.start));
       }
-      rememberUndo(); stageSnapshot({ cells: nextCells, notes: nextNotes, startDate, timelineStartHour });
+      const pastedLate = grid.flatMap((row,r) => row.flatMap((cell,c) => {
+        const item = visibleRows[firstRow+r], id = `${item.key}:${firstHour+c}`;
+        return isActualRow(item.key) && nextCells[id] === 3 && !nextNotes[reasonKey(id)] ? [id] : [];
+      }));
+      requestStatusEdit(nextCells,nextNotes,pastedLate);
       selectRange({ anchor: { row: firstRow, hour: firstHour }, end: { row: firstRow + grid.length - 1, hour: firstHour + grid[0].length - 1 } });
-      setPasteDraft(null); setMessage("Đã dán. Bấm Cập nhật để lưu; Undo để hoàn tác toàn bộ lần dán.");
+      setPasteDraft(null); setMessage(pastedLate.length ? "Có thể thêm lý do Late hoặc để trống." : "Đã dán. Bấm Cập nhật để lưu; Undo để hoàn tác toàn bộ lần dán.");
     } catch (error) { setMessage((error as Error).message); }
   }
   function clearRange() {
@@ -231,7 +266,7 @@ export default function ShutdownPlanner() {
       if (savedFingerprint.current && fingerprint !== savedFingerprint.current) { undoStack.current = []; redoStack.current = []; }
       savedFingerprint.current = fingerprint;
       setCells(nextCells); setNotes(nextNotes); if (settings.startDate) setStartDate(settings.startDate); if (settings.timelineStartHour) setTimelineStartHour(Math.max(1, Math.min(24, Number(settings.timelineStartHour) || 1)));
-      setEditRole(auth.role === "admin" || auth.role === "input" ? auth.role : null);
+      setEditRole(auth.role === "admin" || auth.role === "prod" || auth.role === "main" ? auth.role : null);
     } catch (error) { setMessage((error as Error).message); }
     finally { loadingRef.current = false; setLoading(false); }
   }
@@ -251,7 +286,7 @@ export default function ShutdownPlanner() {
       if (event.key === "Escape") selectRange(null);
       if (event.key === "Delete" && canEdit && bounds) { event.preventDefault(); clearRange(); }
       if (bounds && /^Arrow/.test(event.key)) { event.preventDefault(); const end = selection!.end; selectPoint({ row: Math.max(0, Math.min(visibleRows.length-1, end.row + (event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0))), hour: Math.max(0, Math.min(74, end.hour + (event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0))) }, event.shiftKey); }
-      if (canEdit && bounds && /^[123]$/.test(event.key) && !mod) { const rows = visibleRows.slice(bounds.top,bounds.bottom+1); if (rows.every(i => canEditRow(i.row) && !i.row.kind.startsWith("detail") && i.row.kind !== "note")) { event.preventDefault(); const next = { ...cells }; for (const item of rows) for (const h of HOURS.slice(bounds.left,bounds.right+1)) next[`${item.key}:${h}`] = Number(event.key); rememberUndo(); stageSnapshot({ cells: next, notes, startDate, timelineStartHour }); } }
+      if (canEdit && bounds && /^[123]$/.test(event.key) && !mod) { const rows = visibleRows.slice(bounds.top,bounds.bottom+1); if (rows.every(i => canEditRow(i.row) && !i.row.kind.startsWith("detail") && i.row.kind !== "note")) { event.preventDefault(); const next = { ...cells }; const ids: string[] = []; for (const item of rows) for (const h of HOURS.slice(bounds.left,bounds.right+1)) { const id = `${item.key}:${h}`; next[id] = Number(event.key); ids.push(id); } requestStatusEdit(next, { ...notes }, ids); } }
     };
     const leave = (event: BeforeUnloadEvent) => { if (dirtyRef.current) { event.preventDefault(); event.returnValue = ""; } };
     window.addEventListener("pointerup", stopSelecting); window.addEventListener("keydown", keyboard); window.addEventListener("copy", copy); window.addEventListener("paste", paste); window.addEventListener("beforeunload", leave);
@@ -262,15 +297,16 @@ export default function ShutdownPlanner() {
     setPinError("");
     const response = await fetch("/api/auth", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pin }) });
     if (!response.ok) { setPinError("Mã PIN không đúng"); return; }
-    const data = await response.json(); setEditRole(data.role === "admin" || data.role === "input" ? data.role : null); setPin("");
+    const data = await response.json(); setEditRole(data.role === "admin" || data.role === "prod" || data.role === "main" ? data.role : null); setPin("");
   }
   async function lock() { if (dirtyRef.current) { setMessage("Bấm Cập nhật trước khi khóa chỉnh sửa."); return; } await fetch("/api/auth", { method: "DELETE" }); setEditRole(null); }
-  function canEditRow(row: ActivityRow) { return editRole === "admin" || (editRole === "input" && (row.kind === "actual" || row.kind === "note")); }
+  function canEditRow(row: ActivityRow) { if (editRole === "admin") return true; if (row.kind !== "actual" && row.kind !== "note") return false; const owner = ["prod-actual", "tipping-actual", "prod-note"].includes(row.key) ? "prod" : "main"; return editRole === owner; }
   function markDirty() { dirtyRef.current = true; setDirty(true); }
   function dataFingerprint(c: CellMap, n: NoteMap, date: string, hour: number) { return JSON.stringify([Object.entries(c).filter(([,v]) => v).sort(([a],[b]) => a.localeCompare(b)), Object.entries(n).filter(([,v]) => v).sort(([a],[b]) => a.localeCompare(b)), date, hour]); }
   function snapshot() { return { cells: { ...cells }, notes: { ...notes }, startDate, timelineStartHour }; }
   function rememberUndo() { revisionRef.current++; undoStack.current.push(snapshot()); redoStack.current = []; if (undoStack.current.length > 50) undoStack.current.shift(); }
   function stageSnapshot(previous: ReturnType<typeof snapshot>) {
+    previous = { ...previous, notes: reconcileReasons(cells,previous.cells,previous.notes) };
     const cellKeys = new Set([...Object.keys(cells), ...Object.keys(previous.cells)]); for (const id of cellKeys) if ((cells[id] || 0) !== (previous.cells[id] || 0)) { const split = id.lastIndexOf(":"); stageCell(id.slice(0, split), Number(id.slice(split+1)), previous.cells[id] || 0); }
     const noteKeys = new Set([...Object.keys(notes), ...Object.keys(previous.notes)]); for (const key of noteKeys) if ((notes[key] || "") !== (previous.notes[key] || "")) stageNote(key, previous.notes[key] || "");
     if (startDate !== previous.startDate) stageSetting("startDate", previous.startDate); if (timelineStartHour !== previous.timelineStartHour) stageSetting("timelineStartHour", String(previous.timelineStartHour));
@@ -299,9 +335,9 @@ export default function ShutdownPlanner() {
     finally { setSaving(false); }
   }
   function updateCell(key: string, hourIndex: number, raw: string) {
-    if (!canEdit) return; const value = raw === "" ? 0 : Math.max(0, Math.min(3, Number.parseInt(raw.replace(/\D/g, ""), 10) || 0));
-    rememberUndo();
-    setCells((current) => ({ ...current, [`${key}:${hourIndex}`]: value })); stageCell(key, hourIndex, value);
+    if (!canWriteCell(editRole,key)) return;
+    const value = raw === "" ? 0 : Math.max(0,Math.min(3,Number.parseInt(raw.replace(/\D/g,""),10)||0));
+    const id = `${key}:${hourIndex}`; requestStatusEdit({ ...cells, [id]:value },{ ...notes },[id]);
   }
   function resetRow(key: string, isTextRow: boolean) {
     if (isTextRow) {
@@ -311,6 +347,8 @@ export default function ShutdownPlanner() {
     } else {
       setCells((current) => { const next = { ...current }; for (const hour of STORED_HOURS) next[`${key}:${hour}`] = 0; return next; });
       for (const hour of STORED_HOURS) stageCell(key, hour, 0);
+      if (isActualRow(key)) { setNotes(current => { const next = { ...current }; for (const hour of STORED_HOURS) next[reasonKey(`${key}:${hour}`)] = ""; return next; }); for (const hour of STORED_HOURS) stageNote(reasonKey(`${key}:${hour}`),""); }
+
     }
   }
   function resetAllInputs() {
@@ -350,11 +388,11 @@ export default function ShutdownPlanner() {
   }
   function openAutoFill(key: string) { setAutoTarget(key); setAutoStart(bounds ? bounds.left+1 : 1); setAutoDuration(bounds ? bounds.right-bounds.left+1 : 1); setAutoStatus(1); }
   function applyAutoFill() {
-    if (!autoTarget) return; const start = Math.max(0, Math.min(HOURS.length - 1, autoStart - 1)); const duration = Math.max(1, Math.min(HOURS.length - start, autoDuration)); const value = Math.max(1, Math.min(3, autoStatus));
-    rememberUndo();
-    const updates = HOURS.slice(start, start + duration).map((hourIndex) => ({ rowKey: autoTarget, hourIndex, value }));
-    setCells((current) => { const next = { ...current }; for (const item of updates) next[`${item.rowKey}:${item.hourIndex}`] = item.value; return next; });
-    for (const update of updates) stageCell(update.rowKey, update.hourIndex, update.value); setAutoTarget(null);
+    if (!autoTarget || !canWriteCell(editRole,autoTarget)) return;
+    const start = Math.max(0,Math.min(74,autoStart-1)), duration = Math.max(1,Math.min(75-start,autoDuration));
+    const next = { ...cells }; const ids = HOURS.slice(start,start+duration).map(hour=>`${autoTarget}:${hour}`);
+    for (const id of ids) next[id] = Math.max(1,Math.min(3,autoStatus));
+    setAutoTarget(null); requestStatusEdit(next,{ ...notes },ids);
   }
   function renderTextTimeline(process: Process, row: ActivityRow, key: string) {
     const editable = canEditRow(row); const merges = mergesFor(key); const output = []; let hour = 0;
@@ -364,7 +402,7 @@ export default function ShutdownPlanner() {
       const selectedColor = DETAIL_COLORS[notes[`${key}-color-${cellHour}`] || "white"];
       const selectCell = () => { if (editable) { const selected = { key, hour: cellHour }; selectedTextCellRef.current = selected;  } };
       const rowIndex = visibleRows.findIndex(item => item.key === key);
-      output.push(<div key={textKey} data-grid-row={rowIndex} data-grid-hour={cellHour} onPointerDown={selectCell} style={{ gridColumn: `span ${span}`, backgroundColor: selectedColor }} className={`timeline-text ${span > 1 ? "merged-text" : ""} ${inRange(rowIndex,cellHour,span) ? "selected-text-cell" : ""} ${(timelineStartHour - 1 + cellHour) % 24 === 0 ? "day-start" : ""}`}><TimelineTextEditor value={notes[textKey] || ""} editable={editable} label={`${process.name} ${row.label}, cột ${cellHour+1}`} placeholder={cellHour === 0 ? (row.kind === "note" ? "Ghi chú…" : "Chi tiết…") : ""} onBegin={rememberUndo} onChange={content => { setNotes(current => ({ ...current, [textKey]: content })); stageNote(textKey,content); }} /></div>);
+      output.push(<div key={textKey} data-grid-row={rowIndex} data-grid-hour={cellHour} onPointerDown={selectCell} style={{ gridColumn: `span ${span}`, backgroundColor: selectedColor }} className={`timeline-text ${span > 1 ? "merged-text" : ""} ${inRange(rowIndex,cellHour,span) ? "selected-text-cell" : ""} ${(timelineStartHour - 1 + cellHour) % 24 === 0 ? "day-start" : ""}`}><TimelineTextEditor hours={row.kind.startsWith("detail") && (span > 1 || Boolean(notes[textKey])) ? span : undefined} value={notes[textKey] || ""} editable={editable} label={`${process.name} ${row.label}, cột ${cellHour+1}`} placeholder={cellHour === 0 ? (row.kind === "note" ? "Ghi chú…" : "Chi tiết…") : ""} onBegin={rememberUndo} onChange={content => { setNotes(current => ({ ...current, [textKey]: content })); stageNote(textKey,content); }} /></div>);
       hour += span;
     }
     return output;
@@ -380,9 +418,9 @@ export default function ShutdownPlanner() {
   }), [cells]);
   function exportExcel() {
     const escapeXml = (value: string | number) => String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-    const xCell = (value: string | number, style = "Text") => `<Cell ss:StyleID="${style}"><Data ss:Type="${typeof value === "number" ? "Number" : "String"}">${escapeXml(value)}</Data></Cell>`;
+    const xCell = (value: string | number, style = "Text", comment = "") => `<Cell ss:StyleID="${style}"><Data ss:Type="${typeof value === "number" ? "Number" : "String"}">${escapeXml(value)}</Data>${comment ? `<Comment ss:Author="ILD"><Data xmlns="http://www.w3.org/TR/REC-html40">${escapeXml(comment)}</Data></Comment>` : ""}</Cell>`;
     const summary = processSummary.map((item) => `<Row>${xCell(item.name, "Process")}${xCell(item.plan)}${xCell(item.actual)}${xCell(item.late, item.late > 0 ? "Late-Hours" : "Text")}${xCell(`${item.progress}%`)}</Row>`).join("");
-    const timelineRows = filteredProcesses.flatMap((process) => process.rows.filter((row) => !hideEmptyRows || rowHasData(rowKey(process.name, row), row)).map((row) => { const key = rowKey(process.name, row); const isText = row.kind.startsWith("detail") || row.kind === "note"; const timeline = HOURS.map((hour) => { if (isText) { const color = notes[`${key}-color-${hour}`] || "white"; return xCell(notes[`${key}-h-${hour}`] || "", color === "white" ? "Text" : `Detail-${color}`); } const value = cells[`${key}:${hour}`] || ""; return xCell(value, value === 1 ? "Plan" : value === 2 ? "Done" : value === 3 ? "Late" : "Text"); }).join(""); return `<Row>${xCell(process.name, `Process-${process.tone}`)}${xCell(row.label, `Process-${process.tone}`)}${timeline}${xCell(isText ? "" : HOURS.filter((hour) => cells[`${key}:${hour}`]).length)}</Row>`; })).join("");
+    const timelineRows = filteredProcesses.flatMap((process) => process.rows.filter((row) => !hideEmptyRows || rowHasData(rowKey(process.name, row), row)).map((row) => { const key = rowKey(process.name, row); const isText = row.kind.startsWith("detail") || row.kind === "note"; const timeline = HOURS.map((hour) => { if (isText) { const color = notes[`${key}-color-${hour}`] || "white"; return xCell(notes[`${key}-h-${hour}`] || "", color === "white" ? "Text" : `Detail-${color}`); } const value = cells[`${key}:${hour}`] || ""; return xCell(value, value === 1 ? "Plan" : value === 2 ? "Done" : value === 3 ? "Late" : "Text", value === 3 ? notes[reasonKey(`${key}:${hour}`)] || "" : ""); }).join(""); return `<Row>${xCell(process.name, `Process-${process.tone}`)}${xCell(row.label, `Process-${process.tone}`)}${timeline}${xCell(isText ? "" : HOURS.filter((hour) => cells[`${key}:${hour}`]).length)}</Row>`; })).join("");
     const processStyles = Object.entries({blue:"#DBEAFE",orange:"#FFEDD5",emerald:"#D1FAE5",cyan:"#CFFAFE",lime:"#ECFCCB",green:"#BBF7D0"}).map(([name,color]) => `<Style ss:ID="Process-${name}"><Font ss:Bold="1"/><Interior ss:Color="${color}" ss:Pattern="Solid"/><Alignment ss:Vertical="Center" ss:WrapText="1"/></Style>`).join("");
     const styles = `<Styles><Style ss:ID="Default"><Alignment ss:Horizontal="Center" ss:Vertical="Center"/><Font ss:FontName="Calibri" ss:Size="10"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#D9E5EB"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#D9E5EB"/></Borders></Style><Style ss:ID="Text"><Alignment ss:Horizontal="Center" ss:Vertical="Center" ss:WrapText="1"/></Style><Style ss:ID="Header"><Font ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#0284C7" ss:Pattern="Solid"/><Alignment ss:Horizontal="Center" ss:Vertical="Center"/></Style><Style ss:ID="Process"><Font ss:Bold="1"/></Style><Style ss:ID="Plan"><Font ss:Color="#94A3B8"/><Interior ss:Color="#94A3B8" ss:Pattern="Solid"/></Style><Style ss:ID="Done"><Font ss:Color="#10B981"/><Interior ss:Color="#10B981" ss:Pattern="Solid"/></Style><Style ss:ID="Late"><Font ss:Color="#EF3340"/><Interior ss:Color="#EF3340" ss:Pattern="Solid"/></Style><Style ss:ID="Late-Hours"><Font ss:Bold="1" ss:Color="#DC2626"/><Interior ss:Color="#FEE2E2" ss:Pattern="Solid"/><Alignment ss:Horizontal="Center" ss:Vertical="Center"/></Style><Style ss:ID="Detail-blue"><Interior ss:Color="#DBEAFE" ss:Pattern="Solid"/></Style><Style ss:ID="Detail-green"><Interior ss:Color="#DCFCE7" ss:Pattern="Solid"/></Style><Style ss:ID="Detail-red"><Interior ss:Color="#FEE2E2" ss:Pattern="Solid"/></Style><Style ss:ID="Detail-purple"><Interior ss:Color="#EDE9FE" ss:Pattern="Solid"/></Style>${processStyles}</Styles>`;
     const hours = HOURS.map((hour) => xCell(((timelineStartHour - 1 + hour) % 24) + 1, "Header")).join(""); const dates = dateBands.map((band) => `<Cell ss:StyleID="Header" ss:MergeAcross="${band.span - 1}"><Data ss:Type="String">${shortDate(startDate, band.offset)}</Data></Cell>`).join(""); const counts = HOURS.map((hour) => xCell(hour + 1, "Header")).join("");
@@ -398,31 +436,38 @@ export default function ShutdownPlanner() {
     <section className="mx-auto max-w-[1800px] space-y-4 px-4 py-5 sm:px-6">
       {!canEdit && <div className="pin-bar"><div><strong><UnlockKeyhole size={18}/> Nhập PIN để chỉnh sửa</strong><span>Người không có PIN vẫn xem được toàn bộ tiến độ.</span></div><form onSubmit={(event) => { event.preventDefault(); unlock(); }}><input type="password" value={pin} onChange={(event) => setPin(event.target.value.slice(0, 20))} placeholder="Nhập PIN" aria-label="Mã PIN chỉnh sửa"/><Button type="submit" className="bg-sky-600 text-white">Mở khóa</Button></form>{pinError && <p>{pinError}</p>}</div>}
 
-      <div className="max-w-sm"><div className="card-bright"><span className="kpi-icon bg-sky-100 text-sky-700"><CalendarDays size={20}/></span><div><p className="kpi-label">Ngày bắt đầu</p><input type="date" value={startDate} disabled={editRole !== "admin"} onChange={(e) => { rememberUndo(); setStartDate(e.target.value); stageSetting("startDate", e.target.value); }} className="mt-1 bg-transparent text-lg font-bold outline-none disabled:opacity-100"/></div></div></div>
+      <div className="meeting-overview"><div className="meeting-date"><div className="card-bright"><span className="kpi-icon bg-sky-100 text-sky-700"><CalendarDays size={20}/></span><div><p className="kpi-label">Ngày bắt đầu</p><input type="date" value={startDate} disabled={editRole !== "admin"} onChange={(e) => { rememberUndo(); setStartDate(e.target.value); stageSetting("startDate", e.target.value); }} className="mt-1 bg-transparent text-lg font-bold outline-none disabled:opacity-100"/></div></div></div><div className="status-bars"><div className="status-group"><strong>Trạng thái:</strong><span className="legend"><i className="bg-slate-400"/>1 · Plan</span><span className="legend"><i className="bg-emerald-500"/>2 · Done</span><span className="legend"><i className="bg-red-500"/>3 · Late</span></div><div className="status-group detail-status"><strong>Detail activity:</strong><span className="legend"><i className="bg-green-200"/>Có sản phẩm</span><span className="legend"><i className="bg-blue-200"/>Flushing / Manual cleaning</span><span className="legend"><i className="bg-red-200"/>Hoạt động nguy hiểm</span><span className="legend"><i className="bg-purple-200"/>Hoạt động bảo trì</span></div></div></div>
 
       <div className="process-summary-grid">{processSummary.map((item) => <article key={item.name} className={`process-summary-card ${item.late > 0 ? "has-late" : ""}`}><div><strong>{item.name}</strong><span>{item.progress}%</span></div><dl><div><dt>Plan</dt><dd>{item.plan}h</dd></div><div><dt>Actual</dt><dd>{item.actual}h</dd></div><div className="late-summary"><dt>Late</dt><dd>{item.late}h</dd></div></dl><Progress value={item.progress} className="h-2 bg-slate-100"/></article>)}</div>
 
-      <div className="status-bars"><div className="status-group"><strong>Trạng thái:</strong><span className="legend"><i className="bg-slate-400"/>1 · Plan</span><span className="legend"><i className="bg-emerald-500"/>2 · Done</span><span className="legend"><i className="bg-red-500"/>3 · Late</span></div><div className="status-group detail-status"><strong>Detail activity:</strong><span className="legend"><i className="bg-green-200"/>Có sản phẩm</span><span className="legend"><i className="bg-blue-200"/>Flushing / Manual cleaning</span><span className="legend"><i className="bg-red-200"/>Hoạt động nguy hiểm</span><span className="legend"><i className="bg-purple-200"/>Hoạt động bảo trì</span></div><div className="status-actions">{canEdit && <label className="empty-filter"><input type="checkbox" checked={hideEmptyRows} onChange={(event) => setHideEmptyRows(event.target.checked)}/>Ẩn dòng timeline trống</label>}<span>{saving ? "Đang lưu…" : dirty ? "Có thay đổi chưa lưu — bấm Cập nhật" : lastSaved ? `Đã lưu lúc ${lastSaved}` : canEdit ? "Kéo chọn ô; Delete để xóa" : "Chế độ chỉ xem"}</span></div></div>
+
 
       <div className="meeting-tools">
+        {canEdit && <span className="role-label">{editRole === "admin" ? "Admin" : editRole === "prod" ? "Production" : "Maintenance / Utility"}</span>}
         <button onClick={() => { if (visibleRows.length) { selectRange({ anchor: { row:0,hour:0 },end:{row:visibleRows.length-1,hour:74} }); timelineRef.current?.focus(); } }}>Chọn toàn bộ ({visibleRows.length} dòng)</button>
         <button disabled={!bounds} onClick={() => { if (bounds) selectRange({ anchor: {row:bounds.top,hour:0},end:{row:bounds.bottom,hour:74} }); }}>Chọn cả dòng</button>
         <button disabled={!bounds} onClick={copyGrid}>Copy</button>
         <button disabled={!canEdit || !bounds} onClick={pasteFromClipboard}>Paste</button>
         <button disabled={!canEdit || !bounds} onClick={clearRange}>Xóa vùng</button>
+        <button disabled={!canEdit || !bounds} onClick={()=>editLateReason(selectedLateIds())}>Lý do Late</button>
         <button disabled={!canEdit || saving || !undoStack.current.length} onClick={undoLastAction}>Undo</button>
         <button disabled={!canEdit || saving || !redoStack.current.length} onClick={redoLastAction}>Redo</button>
         <button className="save-action" disabled={!canEdit || !dirty || saving} onClick={saveChanges}>{saving ? "Đang lưu…" : "Cập nhật"}</button>
         <label>Đến <select aria-label="Ngày cần xem" value={jumpDate} onChange={e => setJumpDate(Number(e.target.value))}>{dateBands.map(b => <option key={b.offset} value={b.offset}>{shortDate(startDate,b.offset)}</option>)}</select></label>
         <input aria-label="Giờ cần xem" type="number" min={1} max={24} value={jumpHour} onChange={e=>setJumpHour(Math.max(1,Math.min(24,Number(e.target.value)||1)))}/><button onClick={jumpToTime}>Đến giờ</button>
         <span>{bounds ? `${bounds.bottom-bounds.top+1} dòng × ${bounds.right-bounds.left+1} cột · cột ${bounds.left+1}–${bounds.right+1}` : "Chọn vùng hoặc Shift + chọn ô cuối; nhấp đúp để sửa chữ"}</span>
+        <div className="status-actions">{<label className="empty-filter"><input type="checkbox" checked={hideEmptyRows} onChange={(event) => setHideEmptyRows(event.target.checked)}/>Ẩn dòng timeline trống</label>}<span>{saving ? "Đang lưu…" : dirty ? "Có thay đổi chưa lưu — bấm Cập nhật" : lastSaved ? `Đã lưu lúc ${lastSaved}` : canEdit ? "Kéo chọn ô; Delete để xóa" : "Chế độ chỉ xem"}</span></div>
       </div>
       {message && <div role="status" className="meeting-message">{message}</div>}
       <div className="overflow-hidden rounded-3xl border border-sky-100 bg-white shadow-xl shadow-sky-100/70"><div className="timeline-scroll" ref={timelineRef} tabIndex={0} onPointerDownCapture={e => gridPointer(e)} onPointerMove={e => gridPointer(e,true)} aria-label="Timeline: chọn vùng, Ctrl+C, Ctrl+V; nhấp đúp để sửa chữ"><div className="schedule-grid min-w-max">
         <div className="sticky-head sticky-process top-row process-filter-head" style={{ gridRow: "span 3" }}><span>Process</span><button type="button" onClick={() => setFilterOpen(true)} aria-label="Lọc process"><Filter size={12}/> Lọc</button></div><div className="sticky-head sticky-activity top-row">Activities</div>{dateBands.map((band) => <div key={`${band.offset}-${band.start}`} className="date-band" style={{ gridColumn: `${3 + band.start} / span ${band.span}` }}>{shortDate(startDate, band.offset)}</div>)}<div className="sticky-head sticky-activity hour-row">Time</div>{HOURS.map((hour) => hour === 0 ? <input key="time-start" className="hour-cell header-start-input day-start" type="number" min="1" max="24" disabled={editRole !== "admin"} value={timelineStartHour} onChange={(event) => { const value = Math.max(1, Math.min(24, Number(event.target.value) || 1)); rememberUndo(); setTimelineStartHour(value); stageSetting("timelineStartHour", String(value)); }} aria-label="Giờ bắt đầu timeline"/> : <div key={hour} className={`hour-cell ${(timelineStartHour - 1 + hour) % 24 === 0 ? "day-start" : ""}`}>{((timelineStartHour - 1 + hour) % 24) + 1}</div>)}<div className="counter-head">Counter</div><div className="reset-head">Reset</div><div className="sticky-head sticky-activity count-row">Count</div>{HOURS.map((hour) => <div key={`count-${hour}`} className={`count-cell ${(timelineStartHour - 1 + hour) % 24 === 0 ? "day-start" : ""}`}>{hour + 1}</div>)}
-        {filteredProcesses.flatMap((process) => { const rows = process.rows.filter((row) => !hideEmptyRows || rowHasData(rowKey(process.name, row), row)); return rows.flatMap((row, index) => { const key = rowKey(process.name, row); const count = HOURS.filter((hour) => cells[`${key}:${hour}`] > 0).length; const isTextRow = row.kind.startsWith("detail") || row.kind === "note"; const editable = canEditRow(row); return [index === 0 ? <div key={`${key}-process`} className={`process-cell process-${process.tone}`} style={{ gridRow: `span ${rows.length}` }}>{process.name}</div> : null,<div key={`${key}-activity`} className={`activity-cell process-${process.tone} ${isTextRow ? "detail-row" : ""}`}><span>{row.label}</span>{editable && (isTextRow ? <span className="merge-actions"><button type="button" onClick={() => openMerge(key, "merge")}>Ghép & màu</button><button type="button" onClick={() => splitSelectedMerge(key)}>Tách</button></span> : <button type="button" className="auto-fill-button" onClick={() => openAutoFill(key)}>Tự điền</button>)}</div>,...(isTextRow ? renderTextTimeline(process, row, key) : HOURS.map((hour) => { const id = `${key}:${hour}`; const value = cells[id] || 0; return <input key={id} data-grid-row={visibleRows.findIndex(item => item.key === key)} data-grid-hour={hour} tabIndex={-1} aria-label={`${process.name} ${row.label}, giờ ${((timelineStartHour - 1 + hour) % 24) + 1}`} inputMode="numeric" readOnly={!editable} value={value || ""} onChange={(e) => updateCell(key, hour, e.target.value)}  className={`timeline-input ${fillClass(value)} ${inRange(visibleRows.findIndex(item => item.key === key), hour) ? "selected-cell" : ""} ${(timelineStartHour - 1 + hour) % 24 === 0 ? "day-start" : ""}`}/>;})),<div key={`${key}-counter`} className={`counter-cell ${isTextRow ? "detail-timeline" : ""}`}>{isTextRow ? "—" : count || "—"}</div>,<div key={`${key}-reset`} className={`row-reset-cell ${isTextRow ? "detail-timeline" : ""}`}>{editable && <button type="button" onClick={() => resetRowWithConfirm(key, isTextRow, `${process.name} – ${row.label}`)} title={`Reset ${row.label}`}><RotateCcw size={12}/></button>}</div>]; }); })}
+        {filteredProcesses.flatMap((process) => { const rows = process.rows.filter((row) => !hideEmptyRows || rowHasData(rowKey(process.name, row), row)); return rows.flatMap((row, index) => { const key = rowKey(process.name, row); const count = HOURS.filter((hour) => cells[`${key}:${hour}`] > 0).length; const isTextRow = row.kind.startsWith("detail") || row.kind === "note"; const editable = canEditRow(row); return [index === 0 ? <div key={`${key}-process`} className={`process-cell process-${process.tone}`} style={{ gridRow: `span ${rows.length}` }}>{process.name}</div> : null,<div key={`${key}-activity`} className={`activity-cell process-${process.tone} ${isTextRow ? "detail-row" : ""}`}><span>{row.label}</span>{editable && (isTextRow ? <span className="merge-actions"><button type="button" onClick={() => openMerge(key, "merge")}>Ghép & màu</button><button type="button" onClick={() => splitSelectedMerge(key)}>Tách</button></span> : <button type="button" className="auto-fill-button" onClick={() => openAutoFill(key)}>Tự điền</button>)}</div>,...(isTextRow ? renderTextTimeline(process, row, key) : HOURS.map((hour) => { const id = `${key}:${hour}`; const value = cells[id] || 0; const reason = value === 3 && row.kind === "actual" ? notes[reasonKey(id)] || "" : "";
+          return <button type="button" key={id} data-grid-row={visibleRows.findIndex(item => item.key === key)} data-grid-hour={hour} tabIndex={-1} aria-label={`${process.name} ${row.label}, giờ ${((timelineStartHour-1+hour)%24)+1}${value === 3 ? `, Late: ${reason || "Chưa có lý do"}` : ""}`} title={value === 3 && row.kind === "actual" ? `Late: ${reason || "Chưa có lý do — nhấp đúp để bổ sung"}` : undefined} onDoubleClick={() => { if (value === 3 && row.kind === "actual" && editable) editLateReason([id]); }} className={`timeline-input ${fillClass(value)} ${inRange(visibleRows.findIndex(item => item.key === key),hour) ? "selected-cell" : ""} ${(timelineStartHour-1+hour)%24 === 0 ? "day-start" : ""}`}>
+            {value === 3 && row.kind === "actual" && <span className={`late-note-marker ${reason ? "has-reason" : ""}`} aria-hidden="true">{reason ? "●" : "+"}</span>}
+          </button>;})),<div key={`${key}-counter`} className={`counter-cell ${isTextRow ? "detail-timeline" : ""}`}>{isTextRow ? "—" : count || "—"}</div>,<div key={`${key}-reset`} className={`row-reset-cell ${isTextRow ? "detail-timeline" : ""}`}>{editable && <button type="button" onClick={() => resetRowWithConfirm(key, isTextRow, `${process.name} – ${row.label}`)} title={`Reset ${row.label}`}><RotateCcw size={12}/></button>}</div>]; }); })}
       </div></div></div>
     </section>
+    <Dialog open={Boolean(lateDraft)} onOpenChange={open=>{if(!open)setLateDraft(null);}}><DialogContent className="max-w-md"><DialogHeader><DialogTitle>{lateDraft?.editing ? "Chỉnh sửa lý do Late" : "Lý do Late (không bắt buộc)"}</DialogTitle><DialogDescription>Áp dụng cho {lateDraft?.ids.length || 0} ô Actual. Có thể để trống và bổ sung sau bằng cách nhấp đúp ô đỏ hoặc chọn vùng rồi bấm Lý do Late.</DialogDescription></DialogHeader><label className="late-reason-label">Lý do<textarea value={lateReason} onChange={e=>setLateReason(e.target.value.slice(0,300))} maxLength={300} rows={4} placeholder="Ví dụ: Chờ maintenance xử lý van…"/></label><small>{lateReason.length}/300 ký tự · Chỉ lưu chính thức khi bấm Cập nhật.</small><DialogFooter><Button variant="outline" onClick={()=>setLateDraft(null)}>Hủy</Button>{!lateDraft?.editing && <Button variant="outline" onClick={()=>confirmLate(true)}>Để trống / Bổ sung sau</Button>}<Button onClick={()=>confirmLate(false)}>Xác nhận</Button></DialogFooter></DialogContent></Dialog>
     <Dialog open={Boolean(pasteDraft)} onOpenChange={open => { if (!open) setPasteDraft(null); }}><DialogContent className="paste-dialog"><DialogHeader><DialogTitle>Xem trước vùng dán</DialogTitle><DialogDescription>Dán vào các dòng đang hiển thị. Nội dung, màu và ô ghép hiện có trong vùng này sẽ được thay thế, kể cả ô trống.</DialogDescription></DialogHeader>{pasteDraft && <div data-paste-preview><p>{visibleRows[pasteDraft.row]?.process.name} · {visibleRows[pasteDraft.row]?.row.label} · cột {pasteDraft.hour+1}–{pasteDraft.hour+pasteDraft.grid[0].length} · {pasteDraft.grid.length} dòng</p><div className="paste-table"><table><tbody>{pasteDraft.grid.map((row,r)=><tr key={r}>{row.map((cell,c)=>cell.covered ? null : <td key={c} colSpan={cell.span} style={{background:palette[colorMapping[cell.color] || cell.color] || "#ffffff"}}>{cell.text || " "}</td>)}</tr>)}</tbody></table></div>{Array.from(new Set(pasteDraft.grid.flatMap((row,r)=>row.filter(cell => { const target=visibleRows[pasteDraft.row+r]; try { if (target.row.kind.startsWith("detail") || target.row.kind === "note") detailColorFor(cell.color); else if (!cell.text.trim()) statusValue(cell); return false; } catch { return true; } }).map(cell=>cell.color)))).map(color=><label className="color-map" key={color}>Màu {color}<select value={colorMapping[color] || ""} onChange={e=>setColorMapping(m=>({...m,[color]:e.target.value}))}><option value="">Chọn cách chuyển đổi…</option><option value="white">Không màu / Trống</option><option value="plan">Plan (1)</option><option value="green">Xanh lá / Done (2)</option><option value="red">Đỏ / Late (3)</option><option value="blue">Xanh dương · Cleaning</option><option value="purple">Tím · Maintenance</option></select></label>)}{message && <p role="alert">{message}</p>}</div>}<DialogFooter><Button variant="outline" onClick={()=>setPasteDraft(null)}>Hủy</Button><Button onClick={applyPaste}>Dán và thay thế vùng</Button></DialogFooter></DialogContent></Dialog>
     <Dialog open={Boolean(mergeTarget)} onOpenChange={(open) => { if (!open) setMergeTarget(null); }}><DialogContent className="max-w-sm"><DialogHeader><DialogTitle>{mergeMode === "merge" ? "Ghép ô và tô màu" : "Tách vùng timeline"}</DialogTitle><DialogDescription>Chọn cột bắt đầu và số ô trong phạm vi 1–75.</DialogDescription></DialogHeader><div className="auto-fill-form"><label>Cột bắt đầu (1–75)<input type="number" min="1" max="75" value={mergeStart} onChange={(event) => setMergeStart(Number(event.target.value))}/></label><label>Số ô<input type="number" min="1" max="75" value={mergeDuration} onChange={(event) => setMergeDuration(Number(event.target.value))}/></label>{mergeMode === "merge" && <label>Màu Detail activity<select value={detailColor} onChange={(event) => setDetailColor(event.target.value)}><option value="white">Không màu</option><option value="green">Xanh lá · Có sản phẩm</option><option value="blue">Xanh dương · Flushing / Manual cleaning</option><option value="red">Đỏ · Hoạt động nguy hiểm</option><option value="purple">Tím · Hoạt động bảo trì</option></select></label>}</div><DialogFooter><Button variant="outline" onClick={() => setMergeTarget(null)}>Hủy</Button><Button onClick={applyMergeAction}>{mergeMode === "merge" ? "Ghép và tô màu" : "Tách vùng"}</Button></DialogFooter></DialogContent></Dialog>
     <Dialog open={Boolean(autoTarget)} onOpenChange={(open) => { if (!open) setAutoTarget(null); }}><DialogContent className="max-w-sm"><DialogHeader><DialogTitle>Tự động điền timeline</DialogTitle><DialogDescription>Nhập vị trí bắt đầu, số giờ và trạng thái. Bạn vẫn có thể sửa từng ô thủ công.</DialogDescription></DialogHeader><div className="auto-fill-form"><label>Vị trí bắt đầu (1–75)<input type="number" min="1" max="75" value={autoStart} onChange={(event) => setAutoStart(Number(event.target.value))}/></label><label>Số giờ<input type="number" min="1" max="75" value={autoDuration} onChange={(event) => setAutoDuration(Number(event.target.value))}/></label><label>Trạng thái<select value={autoStatus} onChange={(event) => setAutoStatus(Number(event.target.value))}><option value={1}>1 · Plan</option><option value={2}>2 · Done</option><option value={3}>3 · Late</option></select></label></div><DialogFooter><Button variant="outline" onClick={() => setAutoTarget(null)}>Hủy</Button><Button onClick={applyAutoFill}>Điền timeline</Button></DialogFooter></DialogContent></Dialog>
