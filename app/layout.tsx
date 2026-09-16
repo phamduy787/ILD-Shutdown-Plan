@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "ILD Shutdown Plan",
+  title: "shutdown-plan.ild",
   description: "Theo dõi kế hoạch và tiến độ shutdown theo từng giờ.",
   icons: {
     icon: "/favicon.svg",
